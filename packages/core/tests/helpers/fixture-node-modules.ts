@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
 	cpSync,
 	existsSync,
@@ -9,7 +10,6 @@ import {
 	realpathSync,
 	renameSync,
 	rmSync,
-	statSync,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
@@ -139,11 +139,17 @@ export function ensureFlatNodeModules(cwd: string): string {
 	const target = join(cacheRoot, safe);
 	const readyMarker = join(target, ".ready");
 	const lockfile = join(repoRoot, "pnpm-lock.yaml");
+	const packageManifest = join(cwd, "package.json");
+	const fixtureFingerprint = createHash("sha256")
+		.update(readFileSync(lockfile))
+		.update("\0")
+		.update(readFileSync(packageManifest))
+		.digest("hex");
 
 	const isFresh = (): boolean => {
 		if (!existsSync(readyMarker)) return false;
 		try {
-			return statSync(readyMarker).mtimeMs >= statSync(lockfile).mtimeMs;
+			return readFileSync(readyMarker, "utf8").trim() === fixtureFingerprint;
 		} catch {
 			return false;
 		}
@@ -175,7 +181,9 @@ export function ensureFlatNodeModules(cwd: string): string {
 	}
 
 	try {
-		if (!isFresh()) buildInto(repoRoot, packageName, target);
+		if (!isFresh()) {
+			buildInto(repoRoot, packageName, target, fixtureFingerprint);
+		}
 	} finally {
 		rmSync(lockDir, { recursive: true, force: true });
 	}
@@ -186,6 +194,7 @@ function buildInto(
 	repoRoot: string,
 	packageName: string,
 	target: string,
+	fixtureFingerprint: string,
 ): void {
 	// Build into a sibling staging dir, then atomically swap into place so
 	// readers never observe a half-built tree.
@@ -222,5 +231,5 @@ function buildInto(
 	stripEscapingSymlinks(stagedModules);
 
 	renameSync(staging, target);
-	writeFileSync(join(target, ".ready"), `${new Date().toISOString()}\n`);
+	writeFileSync(join(target, ".ready"), `${fixtureFingerprint}\n`);
 }
